@@ -22,6 +22,7 @@ bool rainbow_spin(effect_params_t *params);
 bool random_raindrop(effect_params_t *params);
 bool random_light_key(effect_params_t *params);
 bool typing_heatmap(effect_params_t *params);
+void process_rgb_matrix_wave_simulation(uint8_t row, uint8_t col);
 bool wave_simulation(effect_params_t *params);
 bool digital_rain(effect_params_t *params);
 bool solid_reactive_simple(effect_params_t *params);
@@ -620,7 +621,7 @@ bool typing_heatmap(effect_params_t *params) {
 #define RGB_MATRIX_WAVE_SIMULATION_HEIGHT 6
 #define RGB_MATRIX_WAVE_SIMULATION_SIZE                                                        \
     (RGB_MATRIX_WAVE_SIMULATION_WIDTH * RGB_MATRIX_WAVE_SIMULATION_HEIGHT)
-#define RGB_MATRIX_WAVE_SIMULATION_INITIAL_AMPLITUDE 12000
+#define RGB_MATRIX_WAVE_SIMULATION_DROP_AMPLITUDE 12000
 
 static int16_t wave_simulation_previous_buffer[RGB_MATRIX_WAVE_SIMULATION_SIZE];
 static int16_t wave_simulation_current_buffer[RGB_MATRIX_WAVE_SIMULATION_SIZE];
@@ -677,6 +678,14 @@ static void wave_simulation_inject_drop(uint8_t center_x, uint8_t center_y, int1
             wave_simulation_previous[idx] = wave_simulation_current[idx];
         }
     }
+}
+
+void process_rgb_matrix_wave_simulation(uint8_t row, uint8_t col) {
+    if (row >= RGB_MATRIX_WAVE_SIMULATION_HEIGHT || col >= RGB_MATRIX_WAVE_SIMULATION_WIDTH) {
+        return;
+    }
+
+    wave_simulation_inject_drop(col, row, RGB_MATRIX_WAVE_SIMULATION_DROP_AMPLITUDE);
 }
 
 static void wave_simulation_step(void) {
@@ -762,7 +771,6 @@ bool wave_simulation(effect_params_t *params) {
 
     if (params->init) {
         wave_simulation_reset_buffers();
-        wave_simulation_inject_drop(5, 4, RGB_MATRIX_WAVE_SIMULATION_INITIAL_AMPLITUDE);
         zmk_rgb_matrix_set_color_all(0, 0, 0);
     } else if (params->iter == 0) {
         wave_simulation_step();

@@ -175,6 +175,14 @@ void process_rgb_matrix(uint8_t row, uint8_t col, bool pressed) {
         }
     }
 #endif
+#ifdef ENABLE_RGB_EFFECT_WAVE_SIMULATION
+    void process_rgb_matrix_wave_simulation(uint8_t row, uint8_t col);
+    if (pressed) {
+        if (rgb_matrix_config.mode == RGB_EFFECT_WAVE_SIMULATION) {
+            process_rgb_matrix_wave_simulation(row, col);
+        }
+    }
+#endif
 #ifdef CONFIG_KEYCHRON_RGB_ENABLE
     void process_rgb_matrix_kb(uint8_t row, uint8_t col, bool pressed);
     process_rgb_matrix_kb(row, col, pressed);
