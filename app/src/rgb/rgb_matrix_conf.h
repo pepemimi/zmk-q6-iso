@@ -28,7 +28,8 @@
 #ifdef CONFIG_KEYCHRON_RGB_ENABLE
 #define ENABLE_RGB_EFFECT_MIXED_RGB   // 23
 #define ENABLE_RGB_EFFECT_PER_KEY_RGB // 24
-#define ENABLE_RGB_EFFECT_WAVES //25
+#define ENABLE_RGB_EFFECT_WAVES            // 25
+#define ENABLE_RGB_EFFECT_WAVE_SIMULATION  // 26
 #endif
 // #define ENABLE_RGB_EFFECT_RUN                       //23
 
@@ -108,6 +109,9 @@ enum rgb_effects {
 #endif
 #ifdef ENABLE_RGB_EFFECT_WAVES
     RGB_EFFECT_WAVES,
+#endif
+#ifdef ENABLE_RGB_EFFECT_WAVE_SIMULATION
+    RGB_EFFECT_WAVE_SIMULATION,
 #endif
 
 #ifdef ENABLE_RGB_EFFECT_RUN

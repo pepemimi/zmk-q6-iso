@@ -22,6 +22,8 @@ bool rainbow_spin(effect_params_t *params);
 bool random_raindrop(effect_params_t *params);
 bool random_light_key(effect_params_t *params);
 bool typing_heatmap(effect_params_t *params);
+void process_rgb_matrix_wave_simulation(uint8_t row, uint8_t col);
+bool wave_simulation(effect_params_t *params);
 bool digital_rain(effect_params_t *params);
 bool solid_reactive_simple(effect_params_t *params);
 bool solid_reactive_multiwide(effect_params_t *params);
@@ -92,6 +94,9 @@ rgb_effect_func rgb_effect_funcs[] = {
 #endif
 #ifdef ENABLE_RGB_EFFECT_TYPING_HEATMAP
     typing_heatmap,
+#endif
+#ifdef ENABLE_RGB_EFFECT_WAVE_SIMULATION
+    wave_simulation,
 #endif
 #ifdef ENABLE_RGB_EFFECT_DIGITAL_RAIN
     digital_rain,
@@ -609,6 +614,171 @@ bool typing_heatmap(effect_params_t *params) {
     return zmk_rgb_matrix_check_finished_leds(led_max);
 }
 
+#endif
+
+#ifdef ENABLE_RGB_EFFECT_WAVE_SIMULATION
+#define RGB_MATRIX_WAVE_SIMULATION_WIDTH 20
+#define RGB_MATRIX_WAVE_SIMULATION_HEIGHT 6
+#define RGB_MATRIX_WAVE_SIMULATION_SIZE                                                        \
+    (RGB_MATRIX_WAVE_SIMULATION_WIDTH * RGB_MATRIX_WAVE_SIMULATION_HEIGHT)
+#define RGB_MATRIX_WAVE_SIMULATION_DROP_AMPLITUDE 12000
+
+static int16_t wave_simulation_previous_buffer[RGB_MATRIX_WAVE_SIMULATION_SIZE];
+static int16_t wave_simulation_current_buffer[RGB_MATRIX_WAVE_SIMULATION_SIZE];
+static int16_t wave_simulation_next_buffer[RGB_MATRIX_WAVE_SIMULATION_SIZE];
+
+static int16_t *wave_simulation_previous = wave_simulation_previous_buffer;
+static int16_t *wave_simulation_current = wave_simulation_current_buffer;
+static int16_t *wave_simulation_next = wave_simulation_next_buffer;
+
+static inline uint8_t wave_simulation_index(uint8_t x, uint8_t y) {
+    return (y * RGB_MATRIX_WAVE_SIMULATION_WIDTH) + x;
+}
+
+static inline int16_t wave_simulation_saturate_i16(int32_t value) {
+    if (value > INT16_MAX) {
+        return INT16_MAX;
+    }
+    if (value < INT16_MIN) {
+        return INT16_MIN;
+    }
+    return (int16_t)value;
+}
+
+static void wave_simulation_reset_buffers(void) {
+    memset(wave_simulation_previous_buffer, 0, sizeof(wave_simulation_previous_buffer));
+    memset(wave_simulation_current_buffer, 0, sizeof(wave_simulation_current_buffer));
+    memset(wave_simulation_next_buffer, 0, sizeof(wave_simulation_next_buffer));
+    wave_simulation_previous = wave_simulation_previous_buffer;
+    wave_simulation_current = wave_simulation_current_buffer;
+    wave_simulation_next = wave_simulation_next_buffer;
+}
+
+static void wave_simulation_inject_drop(uint8_t center_x, uint8_t center_y, int16_t amplitude) {
+    for (uint8_t y = 0; y < RGB_MATRIX_WAVE_SIMULATION_HEIGHT; y++) {
+        for (uint8_t x = 0; x < RGB_MATRIX_WAVE_SIMULATION_WIDTH; x++) {
+            int16_t dx = (int16_t)x - (int16_t)center_x;
+            int16_t dy = (int16_t)y - (int16_t)center_y;
+            uint8_t dist_sq = (uint8_t)(dx * dx + dy * dy);
+
+            if (dist_sq > 4) {
+                continue;
+            }
+
+            int16_t drop_value = amplitude / 4;
+            if (dist_sq == 0) {
+                drop_value = amplitude;
+            } else if (dist_sq == 1) {
+                drop_value = amplitude / 2;
+            }
+
+            uint8_t idx = wave_simulation_index(x, y);
+            int32_t sum = (int32_t)wave_simulation_current[idx] + drop_value;
+            wave_simulation_current[idx] = wave_simulation_saturate_i16(sum);
+            wave_simulation_previous[idx] = wave_simulation_current[idx];
+        }
+    }
+}
+
+void process_rgb_matrix_wave_simulation(uint8_t row, uint8_t col) {
+    if (row >= RGB_MATRIX_WAVE_SIMULATION_HEIGHT || col >= RGB_MATRIX_WAVE_SIMULATION_WIDTH) {
+        return;
+    }
+
+    wave_simulation_inject_drop(col, row, RGB_MATRIX_WAVE_SIMULATION_DROP_AMPLITUDE);
+}
+
+static void wave_simulation_step(void) {
+    for (uint8_t y = 0; y < RGB_MATRIX_WAVE_SIMULATION_HEIGHT; y++) {
+        uint8_t top_y = y > 0 ? (y - 1) : y;
+        uint8_t bottom_y =
+            y < (RGB_MATRIX_WAVE_SIMULATION_HEIGHT - 1) ? (y + 1) : y;
+
+        for (uint8_t x = 0; x < RGB_MATRIX_WAVE_SIMULATION_WIDTH; x++) {
+            uint8_t left_x = x > 0 ? (x - 1) : x;
+            uint8_t right_x =
+                x < (RGB_MATRIX_WAVE_SIMULATION_WIDTH - 1) ? (x + 1) : x;
+            uint8_t idx = wave_simulation_index(x, y);
+
+            int32_t laplacian = (int32_t)wave_simulation_current[wave_simulation_index(x, top_y)] +
+                                (int32_t)wave_simulation_current[wave_simulation_index(x, bottom_y)] +
+                                (int32_t)wave_simulation_current[wave_simulation_index(left_x, y)] +
+                                (int32_t)wave_simulation_current[wave_simulation_index(right_x, y)] -
+                                ((int32_t)wave_simulation_current[idx] * 4);
+            int32_t wave = ((int32_t)wave_simulation_current[idx] * 2) -
+                           (int32_t)wave_simulation_previous[idx] + (laplacian >> 2);
+            int32_t damped = wave - (wave >> 6);
+
+            wave_simulation_next[idx] = wave_simulation_saturate_i16(damped);
+        }
+    }
+
+    int16_t *tmp = wave_simulation_previous;
+    wave_simulation_previous = wave_simulation_current;
+    wave_simulation_current = wave_simulation_next;
+    wave_simulation_next = tmp;
+}
+
+static void wave_simulation_render(effect_params_t *params, uint8_t led_min,
+                                   uint8_t led_max) {
+    // Positive wave values are rendered cyan, negative values magenta.
+    // Brightness scales with absolute amplitude.
+    for (uint8_t row = 0; row < RGB_MATRIX_WAVE_SIMULATION_HEIGHT; row++) {
+        if (row >= MATRIX_ROWS) {
+            continue;
+        }
+
+        for (uint8_t col = 0; col < RGB_MATRIX_WAVE_SIMULATION_WIDTH; col++) {
+            if (col >= MATRIX_COLS) {
+                continue;
+            }
+
+            int16_t sample = wave_simulation_current[wave_simulation_index(col, row)];
+            int32_t magnitude = sample >= 0 ? sample : -(int32_t)sample;
+            uint8_t intensity = (uint8_t)((magnitude > INT16_MAX ? INT16_MAX : magnitude) >> 7);
+            uint8_t red = 0;
+            uint8_t green = 0;
+            uint8_t blue = 0;
+
+            if (intensity > 0) {
+                if (sample >= 0) {
+                    green = intensity >> 2;
+                    blue = intensity;
+                } else {
+                    red = intensity;
+                    blue = intensity >> 3;
+                }
+            }
+
+            uint8_t led_indices[LED_HITS_TO_REMEMBER];
+            uint8_t led_count = zmk_rgb_matrix_map_row_column_to_led(row, col, led_indices);
+            for (uint8_t led_idx = 0; led_idx < led_count; led_idx++) {
+                uint8_t led = led_indices[led_idx];
+                if (led < led_min || led >= led_max) {
+                    continue;
+                }
+                if (!HAS_ANY_FLAGS(g_led_config.flags[led], params->flags)) {
+                    continue;
+                }
+                zmk_rgb_matrix_set_color(led, red, green, blue);
+            }
+        }
+    }
+}
+
+bool wave_simulation(effect_params_t *params) {
+    RGB_MATRIX_USE_LIMITS(led_min, led_max);
+
+    if (params->init) {
+        wave_simulation_reset_buffers();
+        zmk_rgb_matrix_set_color_all(0, 0, 0);
+    } else if (params->iter == 0) {
+        wave_simulation_step();
+    }
+
+    wave_simulation_render(params, led_min, led_max);
+    return zmk_rgb_matrix_check_finished_leds(led_max);
+}
 #endif
 
 #ifdef ENABLE_RGB_EFFECT_DIGITAL_RAIN
